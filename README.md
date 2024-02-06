@@ -9,6 +9,16 @@
 
 The Deep Learning framework based on [Lightning](https://github.com/Lightning-AI/lightning).
 
+## Active learning
+
+> IMPORTANT: this fork is intended for active learning tasks.
+
+To run your active learning task, just use:
+
+```bash
+thunder start-al path_to_config
+```
+
 ## Install
 
 ```bash
