@@ -9,6 +9,8 @@ from lazycon import Config
 from lightning import LightningModule, Trainer
 from typer import Abort, Argument, Option
 from typing_extensions import Annotated
+import wandb
+from copy import deepcopy
 
 from ..config import log_hyperparam
 from ..layout import Layout, Node, Single
@@ -191,3 +193,67 @@ def get_nodes(experiment: Path, names: Optional[Sequence[str]]):
         return
 
     return [nodes[x] for x in names]
+
+
+@app.command()
+def start_al(
+        experiment: ExpArg,
+        name: Annotated[Optional[str], Argument(help='The name of the sub-experiment to start')] = None,
+):
+    """ Start an active learning pipeline. """
+    experiment = Path(experiment)
+    if not experiment.is_absolute():
+        print('The `experiment` argument must be an absolute.')
+        raise Abort(1)
+
+    config_path = experiment / 'experiment.config'
+    nodes = load_nodes(experiment)
+
+    if name is None:
+        if len(nodes) > 1:
+            # TODO
+            raise ValueError
+        elif len(nodes) == 1:
+            node, = nodes.values()
+        else:
+            node = None
+    else:
+        node = nodes[name]
+
+    # load the main config
+    main_config = Config.load(config_path)
+    # get the layout
+    main_layout: Layout = main_config.get('layout', Single())
+    config, root, params = main_layout.load(experiment, node)
+
+    with chdir(root):
+        layout: Layout = config.get('layout', Single())
+        layout.set(**params)
+        
+        module: LightningModule = config.module
+        config_trainer: Trainer = config.trainer
+        active_strategy = config.active_strategy
+        n_iterations: int = active_strategy.n_iterations
+        
+        for iteration in range(n_iterations):
+            name = f"iteration_{iteration}"
+            iteration_folder = root / name
+            iteration_folder.mkdir(parents=True, exist_ok=True)
+            
+            with chdir(iteration_folder):
+                wandb.init(
+                    name=name, 
+                    group=config.GroupName,
+                    project=config.project,
+                    entity=config.entity
+                )
+                ckpt_path = last_checkpoint(".")
+                train_data = active_strategy.update_training(iteration)
+
+                trainer = deepcopy(config_trainer)
+                trainer.fit(module, train_data, config.get('val_data', None), ckpt_path=ckpt_path)
+                if "test_data" in config:
+                    trainer.test(module, config.test_data, ckpt_path=last_checkpoint("."))
+                if "predict_data" in config:
+                    trainer.predict(module, config.predict_data, ckpt_path=last_checkpoint("."))
+                wandb.finish()
