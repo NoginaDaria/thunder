@@ -250,17 +250,12 @@ def start_al(
                     entity=config.entity
                 )
                 ckpt_path = last_checkpoint(".")
-                train_data, test_data = active_strategy.update_training(iteration) 
+                train_data = active_strategy.update_training(iteration)
 
                 trainer = deepcopy(config_trainer)
-                
                 trainer.fit(module, train_data, config.get('val_data', None), ckpt_path=ckpt_path)
-                
-                trainer.test(module, test_data, ckpt_path=last_checkpoint("."))
-                
+                if "test_data" in config:
+                    trainer.test(module, config.test_data, ckpt_path=last_checkpoint("."))
                 if "predict_data" in config:
                     trainer.predict(module, config.predict_data, ckpt_path=last_checkpoint("."))
                 wandb.finish()
-
-# thunder build code/almis/almis/configs/kidneys/al_core.config /shared/experiments/active_learning/k_al
-# thunder start-al /shared/experiments/active_learning/k_al
