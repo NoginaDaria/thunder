@@ -1,16 +1,18 @@
 import shutil
+from copy import deepcopy
 from io import StringIO
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+import wandb
+import torch
+from lightning.pytorch import seed_everything
 import yaml
 from deli import load, save
 from lazycon import Config
 from lightning import LightningModule, Trainer
 from typer import Abort, Argument, Option
 from typing_extensions import Annotated
-import wandb
-from copy import deepcopy
 
 from ..config import log_hyperparam
 from ..layout import Layout, Node, Single
@@ -18,7 +20,6 @@ from ..torch.utils import last_checkpoint
 from ..utils import chdir
 from .app import app
 from .backend import BackendCommand
-
 
 ExpArg = Annotated[Path, Argument(show_default=False, help='Path to the experiment.')]
 ConfArg = Annotated[Path, Argument(show_default=False, help='The config from which the experiment will be built.')]
@@ -196,12 +197,30 @@ def get_nodes(experiment: Path, names: Optional[Sequence[str]]):
 
     return [nodes[x] for x in names]
 
+def log_hyperparams(config, trainer):
+    names = set(config) - {"module", "trainer", "train_data", "val_data", "ExpName", "GroupName", "datamodule", "active_strategy"}
+    # TODO: lazily determine the types
+    hyperparams = {}
+    for name in names:
+        value = config[name]
+        if isinstance(value, (int, float, bool)):
+            hyperparams[name] = value
+        else:
+            log_hyperparam(trainer.logger, name, value)
+
+    hyperparams["active_strategy"] = config.active_strategy.__class__.__name__
+
+    if hyperparams:
+        trainer.logger.log_hyperparams(hyperparams)
+
 
 @app.command()
 def start_al(
         experiment: ExpArg,
         name: Annotated[Optional[str], Argument(help='The name of the sub-experiment to start')] = None,
 ):
+    torch.use_deterministic_algorithms(True, warn_only=True)
+
     """ Start an active learning pipeline. """
     experiment = Path(experiment)
     if not experiment.is_absolute():
@@ -232,10 +251,13 @@ def start_al(
         layout: Layout = config.get('layout', Single())
         layout.set(**params)
         
-        module: LightningModule = config.module
+        config_module: LightningModule = config.module
         config_trainer: Trainer = config.trainer
         active_strategy = config.active_strategy
         n_iterations: int = active_strategy.n_iterations
+        n_splits = 1 if not hasattr(active_strategy, 'n_splits') else active_strategy.n_splits
+
+        log_hyperparams(config, config_trainer)
         
         for iteration in range(n_iterations):
             name = f"iteration_{iteration}"
@@ -243,19 +265,30 @@ def start_al(
             iteration_folder.mkdir(parents=True, exist_ok=True)
             
             with chdir(iteration_folder):
-                wandb.init(
-                    name=name, 
-                    group=config.GroupName,
-                    project=config.project,
-                    entity=config.entity
-                )
                 ckpt_path = last_checkpoint(".")
-                train_data = active_strategy.update_training(iteration)
+                for _ in range(n_splits):
 
-                trainer = deepcopy(config_trainer)
-                trainer.fit(module, train_data, config.get('val_data', None), ckpt_path=ckpt_path)
-                if "test_data" in config:
-                    trainer.test(module, config.test_data, ckpt_path=last_checkpoint("."))
-                if "predict_data" in config:
-                    trainer.predict(module, config.predict_data, ckpt_path=last_checkpoint("."))
-                wandb.finish()
+                    wandb.init(
+                        name=name, 
+                        group=config.GroupName,
+                        project=config.project,
+                        entity=config.entity
+                    )
+                    trainer = deepcopy(config_trainer)
+                    module = deepcopy(config_module)
+
+                    if iteration == 0:
+                        train_data, unlabeled_data = active_strategy.update_training(starting_cycle=True)
+
+                    seed_everything(seed=active_strategy.random_seed, workers=True)
+                    
+                    trainer.fit(module, train_data, config.get('val_data', None), ckpt_path=ckpt_path)
+
+                    if "test_data" in config:
+                        trainer.test(module, [config.test_data, unlabeled_data], ckpt_path=ckpt_path)
+
+                    train_data, unlabeled_data = active_strategy.update_training(
+                        trainer, module, ckpt_path
+                    )
+                
+                    wandb.finish()
