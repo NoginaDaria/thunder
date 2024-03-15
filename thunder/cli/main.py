@@ -16,7 +16,7 @@ from typing_extensions import Annotated
 
 from ..config import log_hyperparam
 from ..layout import Layout, Node, Single
-from ..torch.utils import last_checkpoint
+from ..torch.utils import last_checkpoint, last_checkpoint_AL
 from ..utils import chdir
 from .app import app
 from .backend import BackendCommand
@@ -274,21 +274,25 @@ def start_al(
                         project=config.project,
                         entity=config.entity
                     )
+
+                    seed_everything(seed=active_strategy.random_seed, workers=True)
+                    torch.use_deterministic_algorithms(True, warn_only=True)
+                    torch.backends.cudnn.benchmark = False
+                    torch.backends.cudnn.deterministic=True
+                    
                     trainer = deepcopy(config_trainer)
                     module = deepcopy(config_module)
 
                     if iteration == 0:
                         train_data, unlabeled_data = active_strategy.update_training(starting_cycle=True)
 
-                    seed_everything(seed=active_strategy.random_seed, workers=True)
-                    
                     trainer.fit(module, train_data, config.get('val_data', None), ckpt_path=ckpt_path)
 
                     if "test_data" in config:
                         trainer.test(module, [config.test_data, unlabeled_data], ckpt_path=ckpt_path)
 
                     train_data, unlabeled_data = active_strategy.update_training(
-                        trainer, module, ckpt_path
+                        trainer, module, last_checkpoint_AL(".")
                     )
                 
                     wandb.finish()

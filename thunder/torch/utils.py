@@ -107,3 +107,21 @@ def last_checkpoint(root: Union[Path, str]) -> Union[Path, str]:
     if not checkpoints:
         return "last"
     return max(checkpoints, key=lambda t: os.stat(t).st_mtime)
+
+def last_checkpoint_AL(root):
+    """
+    Correction for active learning folder structure
+    Load most fresh last.ckpt file based on time.
+    Parameters
+    ----------
+    root: Union[Path, str]
+        Path to folder, where last.ckpt supposed to be.
+    Returns
+    -------
+    checkpoint_path: Union[Path, str]
+        If last.ckpt exists - returns Path to it. Otherwise, returns 'last'.
+    """
+    checkpoints = [p for p in Path(root).glob("*/*/checkpoints/*.ckpt") if p.name != "last.ckpt"]
+    if not checkpoints:
+        return "last"
+    return max(checkpoints, key=lambda t: os.stat(t).st_mtime)
