@@ -219,7 +219,10 @@ def start_al(
         experiment: ExpArg,
         name: Annotated[Optional[str], Argument(help='The name of the sub-experiment to start')] = None,
 ):
+    seed_everything(seed=42, workers=True)
     torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic=True
 
     """ Start an active learning pipeline. """
     experiment = Path(experiment)
